@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import scrolledtext
 from datetime import datetime
 from typing import List
-from crypto_utils import generate_keys, encrypt_message, decrypt_message, serialize_public_key, deserialize_public_key
+from utils.crypto_utils import generate_keys, encrypt_message, decrypt_message, serialize_public_key, deserialize_public_key
 
 PORT = 12345
 BUFFER_SIZE = 4096
@@ -119,6 +119,7 @@ def event_loop():
             if client:
                 try:
                     encrypted_data = client.recv(BUFFER_SIZE)
+                    print(encrypted_data);
                     if encrypted_data:
                         try:
                             message_content = decrypt_message(private_key, encrypted_data)
