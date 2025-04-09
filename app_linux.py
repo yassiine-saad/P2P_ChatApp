@@ -119,7 +119,6 @@ def event_loop():
             if client:
                 try:
                     encrypted_data = client.recv(BUFFER_SIZE)
-                    print(encrypted_data);
                     if encrypted_data:
                         try:
                             message_content = decrypt_message(private_key, encrypted_data)
