@@ -1,255 +1,513 @@
 import socket
 import select
-import tkinter as tk
-from tkinter import scrolledtext
 from datetime import datetime
+import time
+import sys
 from typing import List
-from utils.crypto_utils import generate_keys, encrypt_message, decrypt_message, serialize_public_key, deserialize_public_key
 
-PORT = 12345
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QTextEdit, QLineEdit, QPushButton, QLabel, QListWidgetItem
+)
+from PyQt6.QtCore import QTimer
+from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, QSize
+
+from models.chatSession import ChatSession
+from models.peer import Peer
+from models.message import Message
+from network.discovery_packet import create_discovery_announce, parse_discovery_announce, is_discovery_packet
+from network.leave_packet import create_leave_packet, is_leave_packet, parse_leave_packet
+import signal
+from utils.crypto_utils import decrypt_message, encrypt_message, serialize_public_key, get_or_create_keys, get_fingerprint
+from startup_window import StartupWindow
+
+
+
+
+
+
+
+def handle_sigint(signal, frame):
+    print("[×] Interruption (Ctrl+C). Envoi du paquet LEAVE...")
+    window.send_leave()
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, handle_sigint)
+
+
+
+# ----------------- CONS -----------------
+
 BUFFER_SIZE = 4096
-BROADCAST_IP = "255.255.255.255"
-BROADCAST_PORT = 5007
 
-private_key, public_key = generate_keys()
-discovered_peers = set()
-selected_peer = None
-chat_messages = {}
-active_connections = {}
+DISCOVERY_BROADCAST_IP = "255.255.255.255"
+LOCAL_IP = "172.23.112.36"
 
-def get_local_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-    except:
-        ip = "127.0.0.1"
-    finally:
-        s.close()
-    return ip
+DISCOVERY_BROADCAST_PORT = 5007
+MSG_PORT = 46209
 
-LOCAL_IP = get_local_ip()
+DISCOVERY_BROADCAST_INTERVAL = 5
+DISCOVERY_BROADCAST_TIMEOUT = 5  
 
-class User:
-    def __init__(self, ip_address: str, port: int, public_key=None):
-        self.ip_address = ip_address
-        self.port = port
-        self.public_key = public_key
 
-class Message:
-    def __init__(self, content: str, is_sent: bool, sender_ip: str = ""):
-        self.content = content
-        self.is_sent = is_sent
-        self.sender_ip = sender_ip
-        self.timestamp = datetime.now()
 
-    def __str__(self):
-        sender_info = "Moi" if self.is_sent else self.sender_ip
-        return f"[{self.timestamp.strftime('%H:%M:%S')}] {sender_info}: {self.content}"
+TIMEOUT = 5  # Timeout in seconds for discovery packets
 
-class Chat:
-    def __init__(self, user: User):
-        self.user = user
-        self.messages: List[Message] = []
 
-    def add_message(self, message: Message):
-        self.messages.append(message)
 
-    def get_history(self):
-        return "\n".join(str(msg) for msg in self.messages)
 
-# Sockets et epoll
-epoll = select.epoll()
-server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-server_socket.bind(("0.0.0.0", PORT))
-server_socket.listen(5)
-server_socket.setblocking(False)
-epoll.register(server_socket.fileno(), select.EPOLLIN)
 
-udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-udp_socket.bind(("", BROADCAST_PORT))
-udp_socket.setblocking(False)
-epoll.register(udp_socket.fileno(), select.EPOLLIN)
 
-sockets = {server_socket.fileno(): server_socket, udp_socket.fileno(): udp_socket}
-clients = {}
 
-def event_loop():
-    events = epoll.poll(0.1)
-    for fileno, event in events:
-        if fileno == server_socket.fileno():
-            client, addr = server_socket.accept()
-            client.setblocking(False)
-            epoll.register(client.fileno(), select.EPOLLIN)
-            sockets[client.fileno()] = client
-            clients[client.fileno()] = addr[0]
-        elif fileno == udp_socket.fileno():
+
+# ----------------- CLASSE POUR INTERCEPTER LA TOUCHE "ENTRÉE" -----------------
+
+class MessageInput(QLineEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
+            self.parent().send_message()
+        else:
+            super().keyPressEvent(event)
+
+
+
+# ----------------- Global Var -----------------
+
+
+
+class ChatApp(QWidget):
+    def __init__(self, username: str, ip: str):
+        super().__init__()
+        self.setWindowTitle("P2P ChatApp")
+        self.setGeometry(100, 100, 900, 600)
+
+  
+        self.username = username
+        self.local_ip = ip
+
+
+
+
+
+        # Initialisation des sockets
+        self.epoll = select.epoll()
+        self.peers: set[Peer] = set()
+        self.chat_sessions: list[ChatSession] = []
+        self.active_session = None
+        self.active_peer = None
+
+
+
+    
+
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_socket.bind((self.local_ip, MSG_PORT))
+        self.server_socket.listen(5)
+        self.server_socket.setblocking(False)
+        self.epoll.register(self.server_socket.fileno(), select.EPOLLIN)
+
+        # Socket UDP pour la découverte
+        self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.udp_socket.bind(("", DISCOVERY_BROADCAST_PORT))
+        self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self.udp_socket.setblocking(False)
+        self.epoll.register(self.udp_socket.fileno(), select.EPOLLIN)
+
+
+        # # Initialisation des clés
+        self.private_key, self.public_key = get_or_create_keys()
+        self.public_key_bytes = serialize_public_key(self.public_key)
+
+        self.initUI()
+
+        # Initialisation des timers
+        self.init_timers()
+
+
+
+
+    def initUI(self):
+        self.setStyleSheet("background-color: #e8f5e9; font-family: Arial;")
+        main_layout = QHBoxLayout(self)
+
+        self.user_list = QListWidget()
+        self.user_list.setFixedWidth(300)
+        self.user_list.setStyleSheet("""
+            QListWidget {
+                background-color: #ffffff;
+                border: none;
+                padding: 10px;
+                font-size: 16px;
+            }
+            QListWidget::item {
+                padding: 12px;
+                margin-bottom: 8px;
+                background-color: #f1f1f1;
+                border-radius: 8px;
+                font-weight: bold;
+            }
+            QListWidget::item:selected {
+                border: none;
+                background-color: #4db6ac;
+                color: white;
+            }
+            QListWidget::item:hover {
+                background-color: #b2dfdb;
+            }
+        """)
+
+
+        self.populate_user_list()
+        self.user_list.itemClicked.connect(self.load_chat)
+        main_layout.addWidget(self.user_list)
+        
+        # Zone de chat
+        chat_layout = QVBoxLayout()
+        self.chat_header = QLabel("Sélectionnez un @Host")
+        self.chat_header.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        self.chat_header.setStyleSheet("background-color: #1f294d; color: white; padding: 15px; border-radius: 10px;")
+        self.chat_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        chat_layout.addWidget(self.chat_header)
+        
+        self.chat_display = QTextEdit()
+        self.chat_display.setReadOnly(True)
+        self.chat_display.setStyleSheet("background-color: white; border-radius: 10px; padding: 15px; font-size: 16px;")
+        chat_layout.addWidget(self.chat_display)
+        
+
+        # Barre d'entrée du message
+        input_layout = QHBoxLayout()
+        self.message_input = MessageInput(self)
+        self.message_input.setPlaceholderText("Écrivez un message...")
+        self.message_input.setStyleSheet("""
+            background-color: white;
+            border-radius: 10px;
+            padding: 15px;
+            font-size: 16px;
+        """)
+
+        # Bouton envoyer
+        self.send_button = QPushButton("Envoyer")
+        self.send_button.setStyleSheet("background-color: #1f294d; color: white; padding: 15px; border-radius: 10px; font-size: 16px;")
+        self.send_button.clicked.connect(self.send_message)
+        
+        input_layout.addWidget(self.message_input)
+        input_layout.addWidget(self.send_button)
+        chat_layout.addLayout(input_layout)
+        
+        main_layout.addLayout(chat_layout)
+        self.setLayout(main_layout)
+
+
+
+    def init_timers(self):
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.event_loop)
+        self.timer.start(100)
+
+        self.presence_timer = QTimer()
+        self.presence_timer.timeout.connect(self.send_discovery)
+        self.presence_timer.start(5000)
+
+
+
+    def find_peer(self, ip: str) -> Peer | None:
+        for peer in self.peers:
+            if peer.ip_address == ip:
+                return peer
+        return None
+
+    def find_session_by_fileno(self, fileno: int) -> ChatSession | None:
+        for session in self.chat_sessions:
+            if session.socket.fileno() == fileno:
+                return session
+        return None
+
+
+
+    def populate_user_list(self):
+        self.user_list.clear()
+        for peer in self.peers:
+            item = QListWidgetItem(f" {peer.peer_name}@{peer.ip_address}")
+            item.setData(Qt.ItemDataRole.UserRole, peer)
+            font = QFont()
+            font.setBold(True)
+            item.setFont(font)
+            item.setSizeHint(QSize(280, 50))
+            self.user_list.addItem(item)
+
+    def update_user_list(self):
+        existing_ips = set()
+        for i in range(self.user_list.count()):
+            item = self.user_list.item(i)
+            peer = item.data(Qt.ItemDataRole.UserRole)
+            existing_ips.add(peer.ip_address)
+
+            
+            text = f" {peer.peer_name}@{peer.ip_address}"
+            if peer.unread_messages > 0:
+                text += f" [{peer.unread_messages}]"
+
+            item.setText(text)
+        # Ajouter les nouveaux peers (ceux qui ne sont pas encore dans la liste)
+        for peer in self.peers:
+            if peer.ip_address not in existing_ips:
+                item = QListWidgetItem(f" {peer.peer_name}@{peer.ip_address}")
+                item.setData(Qt.ItemDataRole.UserRole, peer)
+                font = QFont()
+                font.setBold(True)
+                item.setFont(font)
+                item.setSizeHint(QSize(280, 50))
+                self.user_list.addItem(item)
+
+
+    def load_chat(self, item):
+        peer = item.data(Qt.ItemDataRole.UserRole)
+        self.active_peer = peer
+        self.chat_display.clear()
+        self.active_peer.unread_messages = 0
+        self.update_user_list()
+        self.chat_header.setText(f"Chat avec {peer.peer_name}")
+
+
+        # Recherche de la session liée
+        for session in self.chat_sessions:
+            if session.peer.ip_address == peer.ip_address:
+                self.active_session = session
+                self.chat_display.setText("\n".join(session.get_history()))
+                return
+
+        # Si pas de session encore créée
+        self.active_session = None
+        self.chat_display.setText("Aucune session active.")
+
+
+
+    
+
+    def send_message(self):
+        content = self.message_input.text().strip()
+        
+        if not content:
+            return  # Ne rien faire si champ vide
+
+        # Vérifier si un peer est sélectionné
+        if not self.active_peer:
+            print("[!] Aucun peer actif")
+            # Nettoyer le champ de texte
+            self.message_input.clear()
+            self.message_input.setFocus()
+            return
+        
+        # Vérifier si une session existe déjà
+        if self.active_session is None:
+                
+            print("[!] Aucune session active")
             try:
-                data, addr = udp_socket.recvfrom(BUFFER_SIZE)
-                peer_ip = addr[0]
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.connect((self.active_peer.ip_address, MSG_PORT))
+                sock.setblocking(False)
+                self.epoll.register(sock.fileno(), select.EPOLLIN)
 
-                if data.startswith(b'LEAVE|'):
-                    _, ip = data.decode().split('|')
-                    if ip in discovered_peers:
-                        discovered_peers.remove(ip)
-                        chat_messages.pop(ip, None)
-                        def remove_from_listbox():
-                            for i in range(peer_listbox.size()):
-                                if peer_listbox.get(i) == ip:
-                                    peer_listbox.delete(i)
-                                    break
-                        root.after(0, remove_from_listbox)
-                elif peer_ip != LOCAL_IP and peer_ip not in discovered_peers:
-                    parts = data.split(b'||')
-                    if len(parts) == 2:
-                        _, public_key_pem = parts
-                        peer_public_key = deserialize_public_key(public_key_pem)
-
-                        discovered_peers.add(peer_ip)
-                        user = User(peer_ip, PORT, public_key=peer_public_key)
-                        chat_messages[peer_ip] = Chat(user)
-
-                        root.after(0, lambda: peer_listbox.insert(tk.END, peer_ip))
+                session = ChatSession(self.active_peer, sock)
+                self.chat_sessions.append(session)
+                self.active_session = session
+                print(f"[+] Connexion initiée vers {self.active_peer.peer_name}")
             except Exception as e:
-                print(f"[!] Erreur UDP : {e}")
-        elif event & select.EPOLLIN:
-            client = sockets.get(fileno)
-            if client:
-                try:
-                    encrypted_data = client.recv(BUFFER_SIZE)
-                    if encrypted_data:
-                        try:
-                            message_content = decrypt_message(private_key, encrypted_data)
-                        except Exception as e:
-                            print(f"[!] Erreur déchiffrement : {e}")
-                            message_content = "<Message non déchiffrable>"
+                print(f"[Erreur connexion vers {self.active_peer.peer_name}] {e}")
 
-                        peer_ip = clients.get(fileno)
-                        if peer_ip:
-                            if peer_ip not in chat_messages:
-                                chat_messages[peer_ip] = Chat(User(peer_ip, PORT))
-                            message = Message(message_content, is_sent=False, sender_ip=peer_ip)
-                            chat_messages[peer_ip].add_message(message)
-                            if selected_peer == peer_ip:
-                                root.after(0, lambda: update_chat(peer_ip))
-                    else:
-                        epoll.unregister(fileno)
-                        client.close()
-                        sockets.pop(fileno, None)
-                        clients.pop(fileno, None)
-                except:
-                    epoll.unregister(fileno)
-                    client.close()
-                    sockets.pop(fileno, None)
-                    clients.pop(fileno, None)
-    root.after(100, event_loop)
+        message = Message(content, is_sent=True, sender=None)
+        self.active_session.add_message(message)
+        self.chat_display.append(str(message))
+        encrypted = encrypt_message(content, self.active_peer.public_key, self.private_key)
 
-def send_message():
-    global selected_peer
-    if selected_peer:
-        message_content = entry_field.get()
-        if message_content:
-            try:
-                if selected_peer not in active_connections:
-                    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    client.connect((selected_peer, PORT))
-                    client.setblocking(False)
-                    active_connections[selected_peer] = client
+
+        try:
+            self.active_session.socket.sendall(encrypted)
+            print(f"[→] Message envoyé à {session.peer.peer_name}: {content}")
+        except Exception as e:
+            print(f"[Erreur envoi] {e}")
+        
+        # Nettoyer le champ de texte
+        self.message_input.clear()
+        self.message_input.setFocus()
+
+
+
+
+    def event_loop(self):
+        events = self.epoll.poll(0.01)
+        for fileno, event in events:
+            if fileno == self.server_socket.fileno():
+
+                client, addr = self.server_socket.accept()
+                client.setblocking(False)
+                self.epoll.register(client.fileno(), select.EPOLLIN)
+
+                peer = self.find_peer(addr[0])
+                if peer is None:
+                    peer = Peer("Unknown", addr[0], None, addr[1])
+                    self.peers.add(peer)
+                    self.update_user_list()
                 else:
-                    client = active_connections[selected_peer]
+                    peer.port = addr[1]
+                    peer.last_seen = datetime.now()
+                           
+                    # self.populate_user_list()
+                print(f"[+] Nouvelle connexion de {addr[0]}:{addr[1]}")
+                session = ChatSession(peer, client)
+                self.chat_sessions.append(session)
+                print(f"[+] Nouvelle session avec {peer}")
 
-                chat = chat_messages[selected_peer]
-                peer_public_key = chat.user.public_key
-                encrypted_data = encrypt_message(peer_public_key, message_content)
+                if self.active_peer.ip_address == peer.ip_address:
+                    self.active_session = session
 
-                client.send(encrypted_data)
+            elif fileno == self.udp_socket.fileno():
+                # traitement de packet DISCOVERY et packet LEAVE
+                try:
+                    data, addr = self.udp_socket.recvfrom(BUFFER_SIZE)
+                    if is_discovery_packet(data):
+                        # print("→ C'est un paquet DISCOVERY")
+                        result = parse_discovery_announce(data)
 
-                message = Message(message_content, is_sent=True)
-                chat.add_message(message)
-                root.after(0, lambda: update_chat(selected_peer))
-                entry_field.delete(0, tk.END)
+                        username = result['username']
+                        ip = result['ip']
+                        public_key = result['public_key']
+                        timeout = result['timeout']
 
-            except Exception as e:
-                print(f"[!] Erreur d'envoi à {selected_peer}: {e}")
-                if selected_peer in active_connections:
+
+                        # Recherche du peer
+                        peer = self.find_peer(ip)
+
+                        if peer:
+                            # Peer déjà existant → on met à jour le last_seen
+                            peer.last_seen = time.time()
+                            print(f"[✓] Peer mis à jour : {peer.peer_name} ({peer.ip_address}) - Last seen {peer.last_seen}")
+                        else:
+                            # Nouveau peer → on crée et on ajoute à la liste
+                            peer = Peer(username, ip, public_key)
+                            peer.last_seen = time.time()
+                            self.peers.add(peer)  # ✅ Pour un set
+                            print(f"[+] Nouveau peer détecté : {peer}")
+                            self.update_user_list()
+
+                    elif is_leave_packet(data):
+                        # print("→ C'est un paquet LEAVE")
+                        print(f"→ Paquet LEAVE reçu de {addr[0]}")
+
+                        result = parse_leave_packet(data)
+                        leaving_ip = result['ip']
+
+                        peer = self.find_peer(leaving_ip)
+
+                        if peer:
+                            print(f"[−] Peer {peer.peer_name} s’est déconnecté")
+
+                            # Si c’est le peer actif, on nettoie l’UI
+                            if self.active_peer and self.active_peer.ip_address == peer.ip_address:
+                                self.chat_display.clear()
+                                self.chat_header.setText("Sélectionnez un @Host")
+                                self.active_peer = None
+                                self.active_session = None
+
+                            # Supprimer la session liée à ce peer
+                            for session in list(self.chat_sessions):
+                                if session.peer.ip_address == peer.ip_address:
+                                    try:
+                                        self.epoll.unregister(session.socket.fileno())
+                                        session.socket.close()
+                                    except Exception as e:
+                                        print(f"[Erreur fermeture socket] {e}")
+                                    self.chat_sessions.remove(session)
+
+                            # Supprimer le peer de la liste
+                            self.peers.remove(peer)
+                            self.update_user_list()
+                        else:
+                            print("[!] Peer non trouvé pour ce paquet LEAVE")
+
+                    else:
+                        print("→ Paquet inconnu ou non supporté")
+             
+
+                except Exception as e:
+                    print(f"[UDP Error] {e}")
+
+            elif event & select.EPOLLIN:
+                session = self.find_session_by_fileno(fileno)
+                if session:
                     try:
-                        active_connections[selected_peer].close()
-                    except:
-                        pass
-                    del active_connections[selected_peer]
+                        data = session.socket.recv(BUFFER_SIZE)
+                        if data:
 
-def select_peer(event):
-    global selected_peer
-    selected_index = peer_listbox.curselection()
-    if selected_index:
-        selected_peer = peer_listbox.get(selected_index)
-        peer_label.config(text=f"Parler avec: {selected_peer}")
-        root.after(0, lambda: update_chat(selected_peer))
+                            try:
+                                message_text = decrypt_message(data, self.private_key, session.peer.public_key)
+                            except Exception as e:
+                                print(f"[⚠] Signature invalide ou message corrompu : {e}")
+                                message_text = "[Message non vérifié !]"
 
-def announce_presence():
-    try:
-        public_key_pem = serialize_public_key(public_key)
-        message = f"DISCOVER|{LOCAL_IP}".encode() + b'||' + public_key_pem
-        udp_socket.sendto(message, (BROADCAST_IP, BROADCAST_PORT))
-    except Exception as e:
-        print(f"[!] Erreur broadcast : {e}")
-    root.after(5000, announce_presence)
+                            message = Message(message_text, is_sent=False, sender=session.peer)
+                            session.add_message(message)
+                        
+                            if self.active_peer and self.active_session and self.active_session.peer.ip_address == session.peer.ip_address:
+                                self.chat_display.append(str(message))
+                            else:
+                                session.peer.unread_messages += 1
+                                self.update_user_list()
+                                print(f"[!] Nouveau message non lu de {session.peer.peer_name} ({session.peer.ip_address})")
 
-def send_leave_message():
-    try:
-        message = f"LEAVE|{LOCAL_IP}".encode()
-        udp_socket.sendto(message, (BROADCAST_IP, BROADCAST_PORT))
-    except Exception as e:
-        print(f"[!] Erreur envoi LEAVE: {e}")
+                            print(f"[←] Message reçu de {session.peer.peer_name} : {message_text}")
+                        else:
+                            # Connexion fermée proprement par le client
+                            print(f"[-] Déconnexion de {session.peer.peer_name}")
+                            self.epoll.unregister(fileno)
+                            session.socket.close()
+                            self.chat_sessions.remove(session)
+                    except Exception as e:
+                        print(f"[Erreur réception] {e}")
+                    break
 
-def update_chat(peer_ip):
-    chat_box.delete(1.0, tk.END)
-    if peer_ip in chat_messages:
-        chat_box.insert(tk.END, chat_messages[peer_ip].get_history())
-    chat_box.yview(tk.END)
 
-def on_closing():
-    send_leave_message()
-    try:
-        epoll.close()
-        server_socket.close()
-        udp_socket.close()
-        for conn in active_connections.values():
-            try:
-                conn.close()
-            except:
-                pass
-    except:
-        pass
-    root.destroy()
+    def send_discovery(self):
+        try:
+            msg = create_discovery_announce(self.username, self.local_ip, self.public_key_bytes, TIMEOUT,self.private_key)
+            self.udp_socket.sendto(msg, (DISCOVERY_BROADCAST_IP, DISCOVERY_BROADCAST_PORT))
+            print(f"[+] Annonce envoyée en broadcast ({len(msg)} octets)")
+        except Exception as e:
+            print(f"[Broadcast Error] {e}")
+    
 
-# Interface Tkinter
-root = tk.Tk()
-root.title("Chat P2P LAN Sécurisé - Linux")
 
-frame = tk.Frame(root)
-frame.pack()
 
-peer_listbox = tk.Listbox(frame, width=20, height=20)
-peer_listbox.pack(side=tk.LEFT, fill=tk.Y)
-peer_listbox.bind("<<ListboxSelect>>", select_peer)
+    def send_leave(self):
+        try:
+            msg = create_leave_packet(self.local_ip,self.private_key)
+            self.udp_socket.sendto(msg, (DISCOVERY_BROADCAST_IP, DISCOVERY_BROADCAST_PORT))
+        except Exception as e:
+            print(f"[Leave Error] {e}")
+       
 
-chat_box = scrolledtext.ScrolledText(frame, width=50, height=20)
-chat_box.pack(side=tk.RIGHT, fill=tk.BOTH)
 
-peer_label = tk.Label(root, text="Sélectionnez un pair")
-peer_label.pack()
+    def closeEvent(self, event):
+        print("[×] Fermeture de l'application. Envoi du paquet LEAVE...")
+        self.send_leave()
+        super().closeEvent(event)
 
-entry_field = tk.Entry(root, width=40)
-entry_field.pack()
-entry_field.bind("<Return>", lambda event: send_message())
+       
 
-send_button = tk.Button(root, text="Envoyer", command=send_message)
-send_button.pack()
 
-root.protocol("WM_DELETE_WINDOW", on_closing)
-root.after(100, event_loop)
-root.after(200, announce_presence)
-root.mainloop()
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+
+    startup = StartupWindow()
+    startup.show()
+    app.exec()
+
+    if startup.username and startup.selected_ip:
+        window = ChatApp(username=startup.username, ip=startup.selected_ip)
+        window.show()
+        sys.exit(app.exec())
