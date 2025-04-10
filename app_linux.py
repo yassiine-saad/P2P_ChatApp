@@ -246,54 +246,79 @@ class ChatApp(QWidget):
             self.user_list.addItem(item)
 
 
+    # def update_user_list(self):
+    #     # Sauvegarder la sélection actuelle
+    #     current_item = self.user_list.currentItem()
+    #     current_peer = current_item.data(Qt.ItemDataRole.UserRole) if current_item else None
+
+    #     # Indexation des peers dans la liste actuelle
+    #     existing_items = {}
+    #     for i in range(self.user_list.count()):
+    #         item = self.user_list.item(i)
+    #         peer = item.data(Qt.ItemDataRole.UserRole)
+    #         existing_items[peer.ip_address] = item
+
+    #     # Ajout ou mise à jour des peers
+    #     for peer in self.peers:
+    #         text = f" {peer.peer_name}@{peer.ip_address}"
+    #         if peer.unread_messages > 0:
+    #             text += f" [{peer.unread_messages}]"
+
+    #         if peer.ip_address in existing_items:
+    #             item = existing_items[peer.ip_address]
+    #             if item.text() != text:
+    #                 item.setText(text)  # Mise à jour si le texte a changé
+    #         else:
+    #             # Nouveau peer → ajouter
+    #             item = QListWidgetItem(text)
+    #             item.setData(Qt.ItemDataRole.UserRole, peer)
+    #             font = QFont()
+    #             font.setBold(True)
+    #             item.setFont(font)
+    #             item.setSizeHint(QSize(280, 50))
+    #             self.user_list.addItem(item)
+
+    #     # Supprimer les peers qui ne sont plus présents
+    #     ips_in_ui = set(existing_items.keys())
+    #     ips_actual = set(peer.ip_address for peer in self.peers)
+    #     removed_ips = ips_in_ui - ips_actual
+    #     for ip in removed_ips:
+    #         item = existing_items[ip]
+    #         row = self.user_list.row(item)
+    #         self.user_list.takeItem(row)
+
+    #     # Rétablir la sélection si possible
+    #     if current_peer:
+    #         for i in range(self.user_list.count()):
+    #             item = self.user_list.item(i)
+    #             if item.data(Qt.ItemDataRole.UserRole).ip_address == current_peer.ip_address:
+    #                 self.user_list.setCurrentItem(item)
+    #                 break
+
+
     def update_user_list(self):
-        # Sauvegarder la sélection actuelle
         current_item = self.user_list.currentItem()
         current_peer = current_item.data(Qt.ItemDataRole.UserRole) if current_item else None
 
-        # Indexation des peers dans la liste actuelle
-        existing_items = {}
-        for i in range(self.user_list.count()):
-            item = self.user_list.item(i)
-            peer = item.data(Qt.ItemDataRole.UserRole)
-            existing_items[peer.ip_address] = item
+        self.user_list.clear()
 
-        # Ajout ou mise à jour des peers
-        for peer in self.peers:
+        for peer in sorted(self.peers, key=lambda p: p.peer_name.lower()):
             text = f" {peer.peer_name}@{peer.ip_address}"
             if peer.unread_messages > 0:
                 text += f" [{peer.unread_messages}]"
 
-            if peer.ip_address in existing_items:
-                item = existing_items[peer.ip_address]
-                if item.text() != text:
-                    item.setText(text)  # Mise à jour si le texte a changé
-            else:
-                # Nouveau peer → ajouter
-                item = QListWidgetItem(text)
-                item.setData(Qt.ItemDataRole.UserRole, peer)
-                font = QFont()
-                font.setBold(True)
-                item.setFont(font)
-                item.setSizeHint(QSize(280, 50))
-                self.user_list.addItem(item)
+            item = QListWidgetItem(text)
+            item.setData(Qt.ItemDataRole.UserRole, peer)
+            font = QFont()
+            font.setBold(True)
+            item.setFont(font)
+            item.setSizeHint(QSize(280, 50))
+            self.user_list.addItem(item)
 
-        # Supprimer les peers qui ne sont plus présents
-        ips_in_ui = set(existing_items.keys())
-        ips_actual = set(peer.ip_address for peer in self.peers)
-        removed_ips = ips_in_ui - ips_actual
-        for ip in removed_ips:
-            item = existing_items[ip]
-            row = self.user_list.row(item)
-            self.user_list.takeItem(row)
+            # Rétablir la sélection si l’item est toujours là
+            if current_peer and peer.ip_address == current_peer.ip_address:
+                self.user_list.setCurrentItem(item)
 
-        # Rétablir la sélection si possible
-        if current_peer:
-            for i in range(self.user_list.count()):
-                item = self.user_list.item(i)
-                if item.data(Qt.ItemDataRole.UserRole).ip_address == current_peer.ip_address:
-                    self.user_list.setCurrentItem(item)
-                    break
 
 
 
@@ -377,164 +402,276 @@ class ChatApp(QWidget):
 
 
 
-    def event_loop(self):
-        events = self.epoll.poll(0.01)
-        for fileno, event in events:
-            if fileno == self.server_socket.fileno():
+    # def event_loop(self):
+    #     events = self.epoll.poll(0.01)
+    #     for fileno, event in events:
+    #         if fileno == self.server_socket.fileno():
 
-                client, addr = self.server_socket.accept()
-                client.setblocking(False)
-                self.epoll.register(client.fileno(), select.EPOLLIN)
+    #             client, addr = self.server_socket.accept()
+    #             client.setblocking(False)
+    #             self.epoll.register(client.fileno(), select.EPOLLIN)
 
-                peer = self.find_peer(addr[0])
-                if peer is None:
-                    peer = Peer("Unknown", addr[0], None, addr[1])
-                    self.peers.add(peer)
-                    self.update_user_list()
+    #             peer = self.find_peer(addr[0])
+    #             if peer is None:
+    #                 peer = Peer("Unknown", addr[0], None, addr[1])
+    #                 self.peers.add(peer)
+    #                 self.update_user_list()
 
-                else:
-                    peer.port = addr[1]
-                    peer.last_seen = datetime.now()
+    #             else:
+    #                 peer.port = addr[1]
+    #                 peer.last_seen = datetime.now()
                            
-                    # self.populate_user_list()
-                print(f"[+] Nouvelle connexion de {addr[0]}:{addr[1]}")
-                session = ChatSession(peer, client)
-                self.chat_sessions.append(session)
-                print(f"[+] Nouvelle session avec {peer}")
+    #                 # self.populate_user_list()
+    #             print(f"[+] Nouvelle connexion de {addr[0]}:{addr[1]}")
+    #             session = ChatSession(peer, client)
+    #             self.chat_sessions.append(session)
+    #             print(f"[+] Nouvelle session avec {peer}")
 
-                if self.active_peer.ip_address == peer.ip_address:
-                    self.active_session = session
+    #             if self.active_peer and self.active_peer.ip_address == peer.ip_address:
+    #                 self.active_session = session
 
-            elif fileno == self.udp_socket.fileno():
-                try:
-                    data, addr = self.udp_socket.recvfrom(BUFFER_SIZE)
-                    if is_discovery_packet(data):
+    #         elif fileno == self.udp_socket.fileno():
+    #             try:
+    #                 data, addr = self.udp_socket.recvfrom(BUFFER_SIZE)
+    #                 if is_discovery_packet(data):
 
-                        # if addr[0] == self.local_ip:
-                        #     continue
+    #                     if addr[0] == self.local_ip:
+    #                         continue
 
-                        result = parse_discovery_announce(data)
+    #                     result = parse_discovery_announce(data)
 
-                        # username = result['username']
-                        # ip = result['ip']
-                        # public_key = result['public_key']
-
-                        username = result['username']
-                        ip = result['ip']
-                        ed25519_pub = result['ed25519_public_key']
-                        x25519_pub_bytes = result['x25519_public_key_bytes']
+    #                     username = result['username']
+    #                     ip = result['ip']
+    #                     ed25519_pub = result['ed25519_public_key']
+    #                     x25519_pub_bytes = result['x25519_public_key_bytes']
 
 
-                        # peer = self.find_peer(ip)
-
-                        # if peer:
-                        #     peer.last_seen = time.time()
-                        #     print(f"[✓] Peer mis à jour : {peer.peer_name} ({peer.ip_address}) - Last seen {peer.last_seen}")
-                        # else:
-                        #     peer = Peer(username, ip, public_key)
-                        #     peer.last_seen = time.time()
-                        #     self.peers.add(peer)
-                        #     print(f"[+] Nouveau peer détecté : {peer}")
-                        #     self.update_user_list()
-
-
-                        peer = self.find_peer(ip)
-                        if peer:
-                            peer.last_seen = time.time()
-                            print(f"[✓] Peer mis à jour : {peer.peer_name} ({peer.ip_address})")
-                        else:
-                            peer = Peer(
-                                peer_name=username,
-                                ip_address=ip,
-                                ed25519_public_key=ed25519_pub,
-                                x25519_public_key_bytes=x25519_pub_bytes
-                            )
-                            peer.last_seen = time.time()
-                            self.peers.add(peer)
-                            print(f"[+] Nouveau peer détecté : {peer}")
-                            self.update_user_list()
+    #                     peer = self.find_peer(ip)
+    #                     if peer:
+    #                         peer.last_seen = time.time()
+    #                         print(f"[✓] Peer mis à jour : {peer.peer_name} ({peer.ip_address})")
+    #                     else:
+    #                         peer = Peer(
+    #                             peer_name=username,
+    #                             ip_address=ip,
+    #                             ed25519_public_key=ed25519_pub,
+    #                             x25519_public_key_bytes=x25519_pub_bytes
+    #                         )
+    #                         peer.last_seen = time.time()
+    #                         self.peers.add(peer)
+    #                         print(f"[+] Nouveau peer détecté : {peer}")
+    #                         self.update_user_list()
 
 
-                    elif is_leave_packet(data):
-                        print(f"→ Paquet LEAVE reçu de {addr[0]}")
+    #                 elif is_leave_packet(data):
+    #                     print(f"→ Paquet LEAVE reçu de {addr[0]}")
 
-                        result = parse_leave_packet(data)
-                        leaving_ip = result['ip']
+    #                     result = parse_leave_packet(data)
+    #                     leaving_ip = result['ip']
 
-                        peer = self.find_peer(leaving_ip)
+    #                     peer = self.find_peer(leaving_ip)
 
-                        if peer:
-                            print(f"[−] Peer {peer.peer_name} s’est déconnecté")
+    #                     if peer:
+    #                         print(f"[−] Peer {peer.peer_name} s’est déconnecté")
 
-                            # Si c’est le peer actif, on nettoie l’UI
-                            if self.active_peer and self.active_peer.ip_address == peer.ip_address:
-                                self.chat_display.clear()
-                                self.chat_header.setText("Sélectionnez un @Host")
-                                self.active_peer = None
-                                self.active_session = None
+    #                         # Si c’est le peer actif, on nettoie l’UI
+    #                         if self.active_peer and self.active_peer.ip_address == peer.ip_address:
+    #                             self.chat_display.clear()
+    #                             self.chat_header.setText("Sélectionnez un @Host")
+    #                             self.active_peer = None
+    #                             self.active_session = None
 
-                            # Supprimer la session liée à ce peer
-                            for session in list(self.chat_sessions):
-                                if session.peer.ip_address == peer.ip_address:
-                                    try:
-                                        self.epoll.unregister(session.socket.fileno())
-                                        session.socket.close()
-                                    except Exception as e:
-                                        print(f"[Erreur fermeture socket] {e}")
-                                    self.chat_sessions.remove(session)
+    #                         # Supprimer la session liée à ce peer
+    #                         for session in list(self.chat_sessions):
+    #                             if session.peer.ip_address == peer.ip_address:
+    #                                 try:
+    #                                     self.epoll.unregister(session.socket.fileno())
+    #                                     session.socket.close()
+    #                                 except Exception as e:
+    #                                     print(f"[Erreur fermeture socket] {e}")
+    #                                 self.chat_sessions.remove(session)
 
-                            # Supprimer le peer de la liste
-                            self.peers.remove(peer)
-                            self.update_user_list()
-                        else:
-                            print("[!] Peer non trouvé pour ce paquet LEAVE")
+    #                         # Supprimer le peer de la liste
+    #                         self.peers.remove(peer)
+    #                         self.update_user_list()
+    #                     else:
+    #                         print("[!] Peer non trouvé pour ce paquet LEAVE")
 
-                    else:
-                        print("→ Paquet inconnu ou non supporté")
+    #                 else:
+    #                     print("→ Paquet inconnu ou non supporté")
              
 
-                except Exception as e:
-                    print(f"[UDP Error] {e}")
+    #             except Exception as e:
+    #                 print(f"[UDP Error] {e}")
 
-            elif event & select.EPOLLIN:
-                session = self.find_session_by_fileno(fileno)
-                if session:
-                    try:
-                        data = session.socket.recv(BUFFER_SIZE)
-                        if data:
+    #         elif event & select.EPOLLIN:
+    #             session = self.find_session_by_fileno(fileno)
+    #             if session:
+    #                 try:
+    #                     data = session.socket.recv(BUFFER_SIZE)
+    #                     if data:
 
-                            try:
-                                # message_text = decrypt_message(data, self.private_key, session.peer.public_key)
-                                message_text = decrypt_message(
-                                    data,
-                                    self.private_key_x,
-                                    session.peer.ed25519_public_key
-                                )
+    #                         try:
+    #                             # message_text = decrypt_message(data, self.private_key, session.peer.public_key)
+    #                             message_text = decrypt_message(
+    #                                 data,
+    #                                 self.private_key_x,
+    #                                 session.peer.ed25519_public_key
+    #                             )
 
-                            except Exception as e:
-                                print(f"[⚠] Signature invalide ou message corrompu : {e}")
-                                message_text = "[Message non vérifié !]"
+    #                         except Exception as e:
+    #                             print(f"[⚠] Signature invalide ou message corrompu : {e}")
+    #                             message_text = "[Message non vérifié !]"
 
-                            message = Message(message_text, is_sent=False, sender=session.peer)
-                            session.add_message(message)
+    #                         message = Message(message_text, is_sent=False, sender=session.peer)
+    #                         session.add_message(message)
                         
-                            if self.active_peer and self.active_session and self.active_session.peer.ip_address == session.peer.ip_address:
-                                self.chat_display.append(str(message))
-                            else:
-                                session.peer.unread_messages += 1
-                                self.update_user_list()
-                                print(f"[!] Nouveau message non lu de {session.peer.peer_name} ({session.peer.ip_address})")
+    #                         if self.active_peer and self.active_session and self.active_session.peer.ip_address == session.peer.ip_address:
+    #                             self.chat_display.append(str(message))
+    #                         else:
+    #                             session.peer.unread_messages += 1
+    #                             self.update_user_list()
+    #                             print(f"[!] Nouveau message non lu de {session.peer.peer_name} ({session.peer.ip_address})")
 
-                            print(f"[←] Message reçu de {session.peer.peer_name} : {message_text}")
+    #                         print(f"[←] Message reçu de {session.peer.peer_name} : {message_text}")
+    #                     else:
+    #                         # Connexion fermée proprement par le client
+    #                         print(f"[-] Déconnexion de {session.peer.peer_name}")
+    #                         self.epoll.unregister(fileno)
+    #                         session.socket.close()
+    #                         self.chat_sessions.remove(session)
+    #                 except Exception as e:
+    #                     print(f"[Erreur réception] {e}")
+    #                 break
+
+
+    def event_loop(self):
+        try:
+            events = self.epoll.poll(0.01)
+            for fileno, event in events:
+                if fileno == self.server_socket.fileno():
+                    try:
+                        client, addr = self.server_socket.accept()
+                        client.setblocking(False)
+                        self.epoll.register(client.fileno(), select.EPOLLIN)
+
+                        peer = self.find_peer(addr[0])
+                        if peer is None:
+                            peer = Peer("Unknown", addr[0], None, addr[1])
+                            self.peers.add(peer)
+                            self.update_user_list()
                         else:
-                            # Connexion fermée proprement par le client
-                            print(f"[-] Déconnexion de {session.peer.peer_name}")
-                            self.epoll.unregister(fileno)
+                            peer.port = addr[1]
+                            peer.last_seen = datetime.now()
+
+                        print(f"[+] Nouvelle connexion de {addr[0]}:{addr[1]}")
+                        session = ChatSession(peer, client)
+                        self.chat_sessions.append(session)
+                        print(f"[+] Nouvelle session avec {peer}")
+
+                        if self.active_peer and self.active_peer.ip_address == peer.ip_address:
+                            self.active_session = session
+                    except Exception as e:
+                        print(f"[Erreur accept] {e}")
+
+                elif fileno == self.udp_socket.fileno():
+                    try:
+                        data, addr = self.udp_socket.recvfrom(BUFFER_SIZE)
+                        if addr[0] == self.local_ip:
+                            continue
+
+                        if is_discovery_packet(data):
+                            result = parse_discovery_announce(data)
+                            username = result['username']
+                            ip = result['ip']
+                            ed25519_pub = result['ed25519_public_key']
+                            x25519_pub_bytes = result['x25519_public_key_bytes']
+
+                            peer = self.find_peer(ip)
+                            if peer:
+                                peer.last_seen = time.time()
+                                print(f"[✓] Peer mis à jour : {peer.peer_name} ({peer.ip_address})")
+                            else:
+                                peer = Peer(peer_name=username, ip_address=ip, ed25519_public_key=ed25519_pub, x25519_public_key_bytes=x25519_pub_bytes)
+                                peer.last_seen = time.time()
+                                self.peers.add(peer)
+                                print(f"[+] Nouveau peer détecté : {peer}")
+                                self.update_user_list()
+
+                        elif is_leave_packet(data):
+                            print(f"→ Paquet LEAVE reçu de {addr[0]}")
+                            result = parse_leave_packet(data)
+                            leaving_ip = result['ip']
+
+                            peer = self.find_peer(leaving_ip)
+                            if peer:
+                                print(f"[−] Peer {peer.peer_name} s’est déconnecté")
+                                if self.active_peer and self.active_peer.ip_address == peer.ip_address:
+                                    self.chat_display.clear()
+                                    self.chat_header.setText("Sélectionnez un @Host")
+                                    self.active_peer = None
+                                    self.active_session = None
+
+                                for session in list(self.chat_sessions):
+                                    if session.peer.ip_address == peer.ip_address:
+                                        try:
+                                            self.epoll.unregister(session.socket.fileno())
+                                            session.socket.close()
+                                        except Exception as e:
+                                            print(f"[Erreur fermeture socket] {e}")
+                                        self.chat_sessions.remove(session)
+
+                                self.peers.remove(peer)
+                                self.update_user_list()
+                            else:
+                                print("[!] Peer non trouvé pour ce paquet LEAVE")
+
+                        else:
+                            print("→ Paquet inconnu ou non supporté")
+                    except Exception as e:
+                        print(f"[UDP Error] {e}")
+
+                elif event & select.EPOLLIN:
+                    session = self.find_session_by_fileno(fileno)
+                    if session:
+                        try:
+                            data = session.socket.recv(BUFFER_SIZE)
+                            if data:
+                                try:
+                                    message_text = decrypt_message(
+                                        data,
+                                        self.private_key_x,
+                                        session.peer.ed25519_public_key
+                                    )
+                                except Exception as e:
+                                    print(f"[⚠] Signature invalide ou message corrompu : {e}")
+                                    message_text = "[Message non vérifié !]"
+
+                                message = Message(message_text, is_sent=False, sender=session.peer)
+                                session.add_message(message)
+
+                                if self.active_peer and self.active_session and self.active_session.peer.ip_address == session.peer.ip_address:
+                                    self.chat_display.append(str(message))
+                                else:
+                                    session.peer.unread_messages += 1
+                                    self.update_user_list()
+
+                                print(f"[←] Message reçu de {session.peer.peer_name} : {message_text}")
+                            else:
+                                raise ConnectionResetError()
+                        except (ConnectionResetError, ConnectionAbortedError, OSError) as e:
+                            print(f"[-] Déconnexion de {session.peer.peer_name} ({session.peer.ip_address})")
+                            try:
+                                self.epoll.unregister(fileno)
+                            except Exception:
+                                pass
                             session.socket.close()
                             self.chat_sessions.remove(session)
-                    except Exception as e:
-                        print(f"[Erreur réception] {e}")
-                    break
+                        except Exception as e:
+                            print(f"[Erreur réception] {e}")
+        except Exception as e:
+            print(f"[Erreur générale dans event_loop] {e}")
+
 
 
     def send_discovery(self):
@@ -559,7 +696,7 @@ class ChatApp(QWidget):
 
     def send_leave(self):
         try:
-            msg = create_leave_packet(self.local_ip,self.private_key)
+            msg = create_leave_packet(self.local_ip,self.private_key_ed)
             self.udp_socket.sendto(msg, (DISCOVERY_BROADCAST_IP, DISCOVERY_BROADCAST_PORT))
         except Exception as e:
             print(f"[Leave Error] {e}")
@@ -574,7 +711,7 @@ class ChatApp(QWidget):
 
     def check_peer_timeout(self):
         pass # Pour L'instant 
-    
+
         # now = time.time()
         # for peer in list(self.peers):
         #     print(now)
