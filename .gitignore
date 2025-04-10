@@ -2,3 +2,6 @@
 test.py
 discovery_format/*
 P2P_chat/*
+
+*.pyc
+__pycache__/

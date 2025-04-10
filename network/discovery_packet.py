@@ -1,49 +1,132 @@
+# import struct
+# from cryptography.hazmat.primitives.asymmetric import ed25519
+# from cryptography.exceptions import InvalidSignature
+
+# PACKET_TYPE_DISCOVERY = 1
+
+
+# def create_discovery_announce(username: str, ip_address: str, public_key_bytes: bytes, private_key: ed25519.Ed25519PrivateKey) -> bytes:
+#     username_bytes = username.encode('utf-8')
+#     ip_bytes = ip_address.encode('utf-8')
+
+#     # Construction du payload (sans timeout)
+#     payload = struct.pack(
+#         f'!B'                           # type
+#         f'B{len(username_bytes)}s'     # username
+#         f'B{len(ip_bytes)}s'           # IP
+#         f'B{len(public_key_bytes)}s',  # Public key
+#         PACKET_TYPE_DISCOVERY,
+#         len(username_bytes), username_bytes,
+#         len(ip_bytes), ip_bytes,
+#         len(public_key_bytes), public_key_bytes,
+#     )
+
+#     # Signature du payload
+#     signature = private_key.sign(payload)
+
+#     return payload + signature
+
+
+# def parse_discovery_announce(data: bytes) -> dict:
+#     try:
+#         if len(data) < 10:
+#             raise ValueError("Données trop courtes")
+
+#         offset = 0
+
+#         # Type
+#         packet_type = data[offset]
+#         offset += 1
+
+#         if packet_type != PACKET_TYPE_DISCOVERY:
+#             raise ValueError(f"Type de paquet inconnu : {packet_type}")
+
+#         # Username
+#         u_len = data[offset]
+#         offset += 1
+#         username = data[offset:offset + u_len].decode()
+#         offset += u_len
+
+#         # IP Address
+#         ip_len = data[offset]
+#         offset += 1
+#         ip_address = data[offset:offset + ip_len].decode()
+#         offset += ip_len
+
+#         # Public Key
+#         key_len = data[offset]
+#         offset += 1
+#         public_key_bytes = data[offset:offset + key_len]
+#         offset += key_len
+
+#         # Signature
+#         signature = data[offset:]
+#         payload = data[:offset]
+
+#         # Vérification de la signature
+#         public_key = ed25519.Ed25519PublicKey.from_public_bytes(public_key_bytes)
+#         public_key.verify(signature, payload)
+
+#         return {
+#             "type": packet_type,
+#             "username": username,
+#             "ip": ip_address,
+#             "public_key": public_key,
+#             "signature": signature
+#         }
+
+#     except (IndexError, ValueError, UnicodeDecodeError, InvalidSignature) as e:
+#         raise ValueError(f"Erreur parsing ou vérification : {e}")
+
+
+# def is_discovery_packet(data: bytes) -> bool:
+#     # Vérifie que le type est DISCOVERY et que le paquet est plausible
+#     return data and len(data) >= 10 and data[0] == PACKET_TYPE_DISCOVERY
+
+
+
+
 import struct
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import serialization
 
 PACKET_TYPE_DISCOVERY = 1
 
-def create_discovery_announce(username: str, ip_address: str, public_key_bytes: bytes, timeout: int, private_key: ed25519.Ed25519PrivateKey) -> bytes:
+
+def create_discovery_announce(username: str, ip_address: str,
+                              ed25519_pub: bytes, x25519_pub: bytes,
+                              private_key: ed25519.Ed25519PrivateKey) -> bytes:
     username_bytes = username.encode('utf-8')
     ip_bytes = ip_address.encode('utf-8')
 
-    # Construction du payload (sans signature)
+    # Payload sans signature
     payload = struct.pack(
-        f'!B'                           # type
-        f'B{len(username_bytes)}s'     # username
-        f'B{len(ip_bytes)}s'           # ip address
-        f'B{len(public_key_bytes)}s'   # public key
-        f'I',                          # timeout
+        f'!B'  # Type
+        f'B{len(username_bytes)}s'
+        f'B{len(ip_bytes)}s'
+        f'B{len(ed25519_pub)}s'
+        f'B{len(x25519_pub)}s',
         PACKET_TYPE_DISCOVERY,
         len(username_bytes), username_bytes,
         len(ip_bytes), ip_bytes,
-        len(public_key_bytes), public_key_bytes,
-        timeout
+        len(ed25519_pub), ed25519_pub,
+        len(x25519_pub), x25519_pub
     )
 
-    # Signature du payload
     signature = private_key.sign(payload)
 
     return payload + signature
 
 
-
-
 def parse_discovery_announce(data: bytes) -> dict:
     try:
-        if len(data) < 10:
-            raise ValueError("Données trop courtes")
-
         offset = 0
 
         # Type
         packet_type = data[offset]
         offset += 1
-
         if packet_type != PACKET_TYPE_DISCOVERY:
-            raise ValueError(f"Type de paquet inconnu : {packet_type}")
+            raise ValueError("Type de paquet invalide")
 
         # Username
         u_len = data[offset]
@@ -51,51 +134,44 @@ def parse_discovery_announce(data: bytes) -> dict:
         username = data[offset:offset + u_len].decode()
         offset += u_len
 
-        # IP Address
+        # IP address
         ip_len = data[offset]
         offset += 1
-        ip_address = data[offset:offset + ip_len].decode()
+        ip = data[offset:offset + ip_len].decode()
         offset += ip_len
 
-        # Public Key
-        key_len = data[offset]
+        # Ed25519 public key
+        ed_len = data[offset]
         offset += 1
-        public_key_bytes = data[offset:offset + key_len]
-        offset += key_len
+        ed25519_pub_bytes = data[offset:offset + ed_len]
+        offset += ed_len
 
-        # Timeout
-        if len(data) < offset + 4:
-            raise ValueError("Données incomplètes pour timeout")
-        timeout = struct.unpack('!I', data[offset:offset + 4])[0]
-        offset += 4
+        # X25519 public key
+        x_len = data[offset]
+        offset += 1
+        x25519_pub_bytes = data[offset:offset + x_len]
+        offset += x_len
 
         # Signature
         signature = data[offset:]
         payload = data[:offset]
 
         # Vérification de la signature
-        public_key = ed25519.Ed25519PublicKey.from_public_bytes(public_key_bytes)
-        public_key.verify(signature, payload)
+        ed_pub = ed25519.Ed25519PublicKey.from_public_bytes(ed25519_pub_bytes)
+        ed_pub.verify(signature, payload)
 
         return {
             "type": packet_type,
             "username": username,
-            "ip": ip_address,
-            "public_key": public_key,
-            "timeout": timeout,
+            "ip": ip,
+            "ed25519_public_key": ed_pub,
+            "x25519_public_key_bytes": x25519_pub_bytes,
             "signature": signature
         }
 
     except (IndexError, ValueError, UnicodeDecodeError, InvalidSignature) as e:
-        raise ValueError(f"Erreur parsing ou vérification : {e}")
-
-
-# def is_discovery_packet(data: bytes) -> bool:
-#     if not data or len(data) < 1:
-#         return False
-#     return data[0] == PACKET_TYPE_DISCOVERY
+        raise ValueError(f"[!] Erreur parsing ou vérification DISCOVERY: {e}")
 
 
 def is_discovery_packet(data: bytes) -> bool:
-    # Vérifie que le type est bien DISCOVERY et qu'il y a au moins 10 octets (1 pour type + ...)
-    return len(data) >= 10 and data[0] == PACKET_TYPE_DISCOVERY
+    return data and len(data) >= 10 and data[0] == PACKET_TYPE_DISCOVERY

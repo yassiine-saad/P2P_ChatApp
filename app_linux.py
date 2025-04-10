@@ -46,12 +46,7 @@ LOCAL_IP = "172.23.112.36"
 DISCOVERY_BROADCAST_PORT = 5007
 MSG_PORT = 46209
 
-DISCOVERY_BROADCAST_INTERVAL = 5
-DISCOVERY_BROADCAST_TIMEOUT = 5  
-
-
-
-TIMEOUT = 5  # Timeout in seconds for discovery packets
+TIMEOUT = 20
 
 
 
@@ -118,9 +113,14 @@ class ChatApp(QWidget):
         self.epoll.register(self.udp_socket.fileno(), select.EPOLLIN)
 
 
-        # # Initialisation des clés
-        self.private_key, self.public_key = get_or_create_keys()
-        self.public_key_bytes = serialize_public_key(self.public_key)
+        # # # Initialisation des clés
+        # self.private_key, self.public_key = get_or_create_keys()
+        # self.public_key_bytes = serialize_public_key(self.public_key)
+
+        self.private_key_ed, self.public_key_ed, self.private_key_x, self.public_key_x = get_or_create_keys()
+        self.public_key_ed_bytes = serialize_public_key(self.public_key_ed)
+        self.public_key_x_bytes = serialize_public_key(self.public_key_x)
+
 
         self.initUI()
 
@@ -142,6 +142,7 @@ class ChatApp(QWidget):
                 border: none;
                 padding: 10px;
                 font-size: 16px;
+                border-radius: 10px;
             }
             QListWidget::item {
                 padding: 12px;
@@ -213,6 +214,10 @@ class ChatApp(QWidget):
         self.presence_timer.timeout.connect(self.send_discovery)
         self.presence_timer.start(5000)
 
+        self.timeout_checker = QTimer()
+        self.timeout_checker.timeout.connect(self.check_peer_timeout)
+        self.timeout_checker.start(3000)
+
 
 
     def find_peer(self, ip: str) -> Peer | None:
@@ -240,29 +245,56 @@ class ChatApp(QWidget):
             item.setSizeHint(QSize(280, 50))
             self.user_list.addItem(item)
 
+
     def update_user_list(self):
-        existing_ips = set()
+        # Sauvegarder la sélection actuelle
+        current_item = self.user_list.currentItem()
+        current_peer = current_item.data(Qt.ItemDataRole.UserRole) if current_item else None
+
+        # Indexation des peers dans la liste actuelle
+        existing_items = {}
         for i in range(self.user_list.count()):
             item = self.user_list.item(i)
             peer = item.data(Qt.ItemDataRole.UserRole)
-            existing_ips.add(peer.ip_address)
+            existing_items[peer.ip_address] = item
 
-            
+        # Ajout ou mise à jour des peers
+        for peer in self.peers:
             text = f" {peer.peer_name}@{peer.ip_address}"
             if peer.unread_messages > 0:
                 text += f" [{peer.unread_messages}]"
 
-            item.setText(text)
-        # Ajouter les nouveaux peers (ceux qui ne sont pas encore dans la liste)
-        for peer in self.peers:
-            if peer.ip_address not in existing_ips:
-                item = QListWidgetItem(f" {peer.peer_name}@{peer.ip_address}")
+            if peer.ip_address in existing_items:
+                item = existing_items[peer.ip_address]
+                if item.text() != text:
+                    item.setText(text)  # Mise à jour si le texte a changé
+            else:
+                # Nouveau peer → ajouter
+                item = QListWidgetItem(text)
                 item.setData(Qt.ItemDataRole.UserRole, peer)
                 font = QFont()
                 font.setBold(True)
                 item.setFont(font)
                 item.setSizeHint(QSize(280, 50))
                 self.user_list.addItem(item)
+
+        # Supprimer les peers qui ne sont plus présents
+        ips_in_ui = set(existing_items.keys())
+        ips_actual = set(peer.ip_address for peer in self.peers)
+        removed_ips = ips_in_ui - ips_actual
+        for ip in removed_ips:
+            item = existing_items[ip]
+            row = self.user_list.row(item)
+            self.user_list.takeItem(row)
+
+        # Rétablir la sélection si possible
+        if current_peer:
+            for i in range(self.user_list.count()):
+                item = self.user_list.item(i)
+                if item.data(Qt.ItemDataRole.UserRole).ip_address == current_peer.ip_address:
+                    self.user_list.setCurrentItem(item)
+                    break
+
 
 
     def load_chat(self, item):
@@ -323,12 +355,18 @@ class ChatApp(QWidget):
         message = Message(content, is_sent=True, sender=None)
         self.active_session.add_message(message)
         self.chat_display.append(str(message))
-        encrypted = encrypt_message(content, self.active_peer.public_key, self.private_key)
+        # encrypted = encrypt_message(content, self.active_peer.public_key, self.private_key)
+        encrypted = encrypt_message(
+            content,
+            self.active_peer.x25519_public_key_bytes,
+            self.private_key_ed
+        )
+
 
 
         try:
             self.active_session.socket.sendall(encrypted)
-            print(f"[→] Message envoyé à {session.peer.peer_name}: {content}")
+            print(f"[→] Message envoyé à { self.active_session.peer.peer_name}: {content}")
         except Exception as e:
             print(f"[Erreur envoi] {e}")
         
@@ -353,6 +391,7 @@ class ChatApp(QWidget):
                     peer = Peer("Unknown", addr[0], None, addr[1])
                     self.peers.add(peer)
                     self.update_user_list()
+
                 else:
                     peer.port = addr[1]
                     peer.last_seen = datetime.now()
@@ -367,36 +406,56 @@ class ChatApp(QWidget):
                     self.active_session = session
 
             elif fileno == self.udp_socket.fileno():
-                # traitement de packet DISCOVERY et packet LEAVE
                 try:
                     data, addr = self.udp_socket.recvfrom(BUFFER_SIZE)
                     if is_discovery_packet(data):
-                        # print("→ C'est un paquet DISCOVERY")
+
+                        # if addr[0] == self.local_ip:
+                        #     continue
+
                         result = parse_discovery_announce(data)
+
+                        # username = result['username']
+                        # ip = result['ip']
+                        # public_key = result['public_key']
 
                         username = result['username']
                         ip = result['ip']
-                        public_key = result['public_key']
-                        timeout = result['timeout']
+                        ed25519_pub = result['ed25519_public_key']
+                        x25519_pub_bytes = result['x25519_public_key_bytes']
 
 
-                        # Recherche du peer
+                        # peer = self.find_peer(ip)
+
+                        # if peer:
+                        #     peer.last_seen = time.time()
+                        #     print(f"[✓] Peer mis à jour : {peer.peer_name} ({peer.ip_address}) - Last seen {peer.last_seen}")
+                        # else:
+                        #     peer = Peer(username, ip, public_key)
+                        #     peer.last_seen = time.time()
+                        #     self.peers.add(peer)
+                        #     print(f"[+] Nouveau peer détecté : {peer}")
+                        #     self.update_user_list()
+
+
                         peer = self.find_peer(ip)
-
                         if peer:
-                            # Peer déjà existant → on met à jour le last_seen
                             peer.last_seen = time.time()
-                            print(f"[✓] Peer mis à jour : {peer.peer_name} ({peer.ip_address}) - Last seen {peer.last_seen}")
+                            print(f"[✓] Peer mis à jour : {peer.peer_name} ({peer.ip_address})")
                         else:
-                            # Nouveau peer → on crée et on ajoute à la liste
-                            peer = Peer(username, ip, public_key)
+                            peer = Peer(
+                                peer_name=username,
+                                ip_address=ip,
+                                ed25519_public_key=ed25519_pub,
+                                x25519_public_key_bytes=x25519_pub_bytes
+                            )
                             peer.last_seen = time.time()
-                            self.peers.add(peer)  # ✅ Pour un set
+                            self.peers.add(peer)
                             print(f"[+] Nouveau peer détecté : {peer}")
                             self.update_user_list()
 
+
                     elif is_leave_packet(data):
-                        # print("→ C'est un paquet LEAVE")
                         print(f"→ Paquet LEAVE reçu de {addr[0]}")
 
                         result = parse_leave_packet(data)
@@ -445,7 +504,13 @@ class ChatApp(QWidget):
                         if data:
 
                             try:
-                                message_text = decrypt_message(data, self.private_key, session.peer.public_key)
+                                # message_text = decrypt_message(data, self.private_key, session.peer.public_key)
+                                message_text = decrypt_message(
+                                    data,
+                                    self.private_key_x,
+                                    session.peer.ed25519_public_key
+                                )
+
                             except Exception as e:
                                 print(f"[⚠] Signature invalide ou message corrompu : {e}")
                                 message_text = "[Message non vérifié !]"
@@ -474,7 +539,16 @@ class ChatApp(QWidget):
 
     def send_discovery(self):
         try:
-            msg = create_discovery_announce(self.username, self.local_ip, self.public_key_bytes, TIMEOUT,self.private_key)
+            # msg = create_discovery_announce(self.username, self.local_ip, self.public_key_bytes,self.private_key)
+
+            msg = create_discovery_announce(
+                self.username,
+                self.local_ip,
+                self.public_key_ed_bytes,
+                self.public_key_x_bytes,
+                self.private_key_ed
+            )
+
             self.udp_socket.sendto(msg, (DISCOVERY_BROADCAST_IP, DISCOVERY_BROADCAST_PORT))
             print(f"[+] Annonce envoyée en broadcast ({len(msg)} octets)")
         except Exception as e:
@@ -497,17 +571,43 @@ class ChatApp(QWidget):
         self.send_leave()
         super().closeEvent(event)
 
+
+    def check_peer_timeout(self):
+        pass # Pour L'instant 
+    
+        # now = time.time()
+        # for peer in list(self.peers):
+        #     print(now)
+        #     if now - peer.last_seen > TIMEOUT:
+        #         print(f"[×] {peer.peer_name} semble déconnecté (timeout)")
+        #         if self.active_peer and self.active_peer.ip_address == peer.ip_address:
+        #             self.chat_display.clear()
+        #             self.chat_header.setText("Sélectionnez un @Host")
+        #             self.active_peer = None
+        #             self.active_session = None
+        #         self.peers.remove(peer)
+        #         self.update_user_list()
+
+
        
+
+
+# if __name__ == "__main__":
+#     app = QApplication(sys.argv)
+
+#     startup = StartupWindow()
+#     startup.show()
+#     app.exec()
+
+#     if startup.username and startup.selected_ip:
+#         window = ChatApp(username=startup.username, ip=startup.selected_ip)
+#         window.show()
+#         sys.exit(app.exec())
 
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    window = ChatApp(username="yassine", ip="172.23.112.36")
+    window.show()
+    sys.exit(app.exec())
 
-    startup = StartupWindow()
-    startup.show()
-    app.exec()
-
-    if startup.username and startup.selected_ip:
-        window = ChatApp(username=startup.username, ip=startup.selected_ip)
-        window.show()
-        sys.exit(app.exec())
