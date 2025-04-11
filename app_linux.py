@@ -401,150 +401,6 @@ class ChatApp(QWidget):
 
 
 
-
-    # def event_loop(self):
-    #     events = self.epoll.poll(0.01)
-    #     for fileno, event in events:
-    #         if fileno == self.server_socket.fileno():
-
-    #             client, addr = self.server_socket.accept()
-    #             client.setblocking(False)
-    #             self.epoll.register(client.fileno(), select.EPOLLIN)
-
-    #             peer = self.find_peer(addr[0])
-    #             if peer is None:
-    #                 peer = Peer("Unknown", addr[0], None, addr[1])
-    #                 self.peers.add(peer)
-    #                 self.update_user_list()
-
-    #             else:
-    #                 peer.port = addr[1]
-    #                 peer.last_seen = datetime.now()
-                           
-    #                 # self.populate_user_list()
-    #             print(f"[+] Nouvelle connexion de {addr[0]}:{addr[1]}")
-    #             session = ChatSession(peer, client)
-    #             self.chat_sessions.append(session)
-    #             print(f"[+] Nouvelle session avec {peer}")
-
-    #             if self.active_peer and self.active_peer.ip_address == peer.ip_address:
-    #                 self.active_session = session
-
-    #         elif fileno == self.udp_socket.fileno():
-    #             try:
-    #                 data, addr = self.udp_socket.recvfrom(BUFFER_SIZE)
-    #                 if is_discovery_packet(data):
-
-    #                     if addr[0] == self.local_ip:
-    #                         continue
-
-    #                     result = parse_discovery_announce(data)
-
-    #                     username = result['username']
-    #                     ip = result['ip']
-    #                     ed25519_pub = result['ed25519_public_key']
-    #                     x25519_pub_bytes = result['x25519_public_key_bytes']
-
-
-    #                     peer = self.find_peer(ip)
-    #                     if peer:
-    #                         peer.last_seen = time.time()
-    #                         print(f"[✓] Peer mis à jour : {peer.peer_name} ({peer.ip_address})")
-    #                     else:
-    #                         peer = Peer(
-    #                             peer_name=username,
-    #                             ip_address=ip,
-    #                             ed25519_public_key=ed25519_pub,
-    #                             x25519_public_key_bytes=x25519_pub_bytes
-    #                         )
-    #                         peer.last_seen = time.time()
-    #                         self.peers.add(peer)
-    #                         print(f"[+] Nouveau peer détecté : {peer}")
-    #                         self.update_user_list()
-
-
-    #                 elif is_leave_packet(data):
-    #                     print(f"→ Paquet LEAVE reçu de {addr[0]}")
-
-    #                     result = parse_leave_packet(data)
-    #                     leaving_ip = result['ip']
-
-    #                     peer = self.find_peer(leaving_ip)
-
-    #                     if peer:
-    #                         print(f"[−] Peer {peer.peer_name} s’est déconnecté")
-
-    #                         # Si c’est le peer actif, on nettoie l’UI
-    #                         if self.active_peer and self.active_peer.ip_address == peer.ip_address:
-    #                             self.chat_display.clear()
-    #                             self.chat_header.setText("Sélectionnez un @Host")
-    #                             self.active_peer = None
-    #                             self.active_session = None
-
-    #                         # Supprimer la session liée à ce peer
-    #                         for session in list(self.chat_sessions):
-    #                             if session.peer.ip_address == peer.ip_address:
-    #                                 try:
-    #                                     self.epoll.unregister(session.socket.fileno())
-    #                                     session.socket.close()
-    #                                 except Exception as e:
-    #                                     print(f"[Erreur fermeture socket] {e}")
-    #                                 self.chat_sessions.remove(session)
-
-    #                         # Supprimer le peer de la liste
-    #                         self.peers.remove(peer)
-    #                         self.update_user_list()
-    #                     else:
-    #                         print("[!] Peer non trouvé pour ce paquet LEAVE")
-
-    #                 else:
-    #                     print("→ Paquet inconnu ou non supporté")
-             
-
-    #             except Exception as e:
-    #                 print(f"[UDP Error] {e}")
-
-    #         elif event & select.EPOLLIN:
-    #             session = self.find_session_by_fileno(fileno)
-    #             if session:
-    #                 try:
-    #                     data = session.socket.recv(BUFFER_SIZE)
-    #                     if data:
-
-    #                         try:
-    #                             # message_text = decrypt_message(data, self.private_key, session.peer.public_key)
-    #                             message_text = decrypt_message(
-    #                                 data,
-    #                                 self.private_key_x,
-    #                                 session.peer.ed25519_public_key
-    #                             )
-
-    #                         except Exception as e:
-    #                             print(f"[⚠] Signature invalide ou message corrompu : {e}")
-    #                             message_text = "[Message non vérifié !]"
-
-    #                         message = Message(message_text, is_sent=False, sender=session.peer)
-    #                         session.add_message(message)
-                        
-    #                         if self.active_peer and self.active_session and self.active_session.peer.ip_address == session.peer.ip_address:
-    #                             self.chat_display.append(str(message))
-    #                         else:
-    #                             session.peer.unread_messages += 1
-    #                             self.update_user_list()
-    #                             print(f"[!] Nouveau message non lu de {session.peer.peer_name} ({session.peer.ip_address})")
-
-    #                         print(f"[←] Message reçu de {session.peer.peer_name} : {message_text}")
-    #                     else:
-    #                         # Connexion fermée proprement par le client
-    #                         print(f"[-] Déconnexion de {session.peer.peer_name}")
-    #                         self.epoll.unregister(fileno)
-    #                         session.socket.close()
-    #                         self.chat_sessions.remove(session)
-    #                 except Exception as e:
-    #                     print(f"[Erreur réception] {e}")
-    #                 break
-
-
     def event_loop(self):
         try:
             events = self.epoll.poll(0.01)
@@ -703,10 +559,45 @@ class ChatApp(QWidget):
        
 
 
+    # def closeEvent(self, event):
+    #     print("[×] Fermeture de l'application. Envoi du paquet LEAVE...")
+    #     self.send_leave()
+    #     super().closeEvent(event)
+
+
     def closeEvent(self, event):
         print("[×] Fermeture de l'application. Envoi du paquet LEAVE...")
         self.send_leave()
+
+        for session in self.chat_sessions:
+            try:
+                self.epoll.unregister(session.socket.fileno())
+            except Exception as e:
+                print(f"[!] Erreur désenregistrement socket : {e}")
+            try:
+                session.socket.close()
+            except Exception as e:
+                print(f"[!] Erreur fermeture socket session : {e}")
+
+        try:
+            self.epoll.unregister(self.server_socket.fileno())
+            self.server_socket.close()
+        except Exception as e:
+            print(f"[!] Erreur fermeture socket serveur : {e}")
+
+        try:
+            self.epoll.unregister(self.udp_socket.fileno())
+            self.udp_socket.close()
+        except Exception as e:
+            print(f"[!] Erreur fermeture socket UDP : {e}")
+
+        try:
+            self.epoll.close()
+        except Exception as e:
+            print(f"[!] Erreur fermeture epoll : {e}")
+
         super().closeEvent(event)
+
 
 
     def check_peer_timeout(self):
@@ -742,9 +633,25 @@ class ChatApp(QWidget):
 #         sys.exit(app.exec())
 
 
+# if __name__ == "__main__":
+#     app = QApplication(sys.argv)
+#     window = ChatApp(username="yassine", ip="172.23.112.36")
+#     window.show()
+#     sys.exit(app.exec())
+
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = ChatApp(username="yassine", ip="172.23.112.36")
-    window.show()
-    sys.exit(app.exec())
+
+    startup = StartupWindow()
+    startup.show()
+    app.exec()
+
+    if startup.username:
+        ip_local = socket.gethostbyname(socket.gethostname())
+
+        window = ChatApp(username=startup.username, ip=ip_local)
+        window.show()
+        sys.exit(app.exec())
 
