@@ -214,10 +214,6 @@ class ChatApp(QWidget):
         self.presence_timer.timeout.connect(self.send_discovery)
         self.presence_timer.start(5000)
 
-        self.timeout_checker = QTimer()
-        self.timeout_checker.timeout.connect(self.check_peer_timeout)
-        self.timeout_checker.start(3000)
-
 
 
     def find_peer(self, ip: str) -> Peer | None:
@@ -245,55 +241,6 @@ class ChatApp(QWidget):
             item.setSizeHint(QSize(280, 50))
             self.user_list.addItem(item)
 
-
-    # def update_user_list(self):
-    #     # Sauvegarder la sélection actuelle
-    #     current_item = self.user_list.currentItem()
-    #     current_peer = current_item.data(Qt.ItemDataRole.UserRole) if current_item else None
-
-    #     # Indexation des peers dans la liste actuelle
-    #     existing_items = {}
-    #     for i in range(self.user_list.count()):
-    #         item = self.user_list.item(i)
-    #         peer = item.data(Qt.ItemDataRole.UserRole)
-    #         existing_items[peer.ip_address] = item
-
-    #     # Ajout ou mise à jour des peers
-    #     for peer in self.peers:
-    #         text = f" {peer.peer_name}@{peer.ip_address}"
-    #         if peer.unread_messages > 0:
-    #             text += f" [{peer.unread_messages}]"
-
-    #         if peer.ip_address in existing_items:
-    #             item = existing_items[peer.ip_address]
-    #             if item.text() != text:
-    #                 item.setText(text)  # Mise à jour si le texte a changé
-    #         else:
-    #             # Nouveau peer → ajouter
-    #             item = QListWidgetItem(text)
-    #             item.setData(Qt.ItemDataRole.UserRole, peer)
-    #             font = QFont()
-    #             font.setBold(True)
-    #             item.setFont(font)
-    #             item.setSizeHint(QSize(280, 50))
-    #             self.user_list.addItem(item)
-
-    #     # Supprimer les peers qui ne sont plus présents
-    #     ips_in_ui = set(existing_items.keys())
-    #     ips_actual = set(peer.ip_address for peer in self.peers)
-    #     removed_ips = ips_in_ui - ips_actual
-    #     for ip in removed_ips:
-    #         item = existing_items[ip]
-    #         row = self.user_list.row(item)
-    #         self.user_list.takeItem(row)
-
-    #     # Rétablir la sélection si possible
-    #     if current_peer:
-    #         for i in range(self.user_list.count()):
-    #             item = self.user_list.item(i)
-    #             if item.data(Qt.ItemDataRole.UserRole).ip_address == current_peer.ip_address:
-    #                 self.user_list.setCurrentItem(item)
-    #                 break
 
 
     def update_user_list(self):
@@ -373,6 +320,8 @@ class ChatApp(QWidget):
                 session = ChatSession(self.active_peer, sock)
                 self.chat_sessions.append(session)
                 self.active_session = session
+                self.active_peer.port = sock.getsockname()[1]
+                self.active_peer.last_seen = time.time()
                 print(f"[+] Connexion initiée vers {self.active_peer.peer_name}")
             except Exception as e:
                 print(f"[Erreur connexion vers {self.active_peer.peer_name}] {e}")
@@ -559,12 +508,6 @@ class ChatApp(QWidget):
        
 
 
-    # def closeEvent(self, event):
-    #     print("[×] Fermeture de l'application. Envoi du paquet LEAVE...")
-    #     self.send_leave()
-    #     super().closeEvent(event)
-
-
     def closeEvent(self, event):
         print("[×] Fermeture de l'application. Envoi du paquet LEAVE...")
         self.send_leave()
@@ -600,47 +543,6 @@ class ChatApp(QWidget):
 
 
 
-    def check_peer_timeout(self):
-        pass # Pour L'instant 
-
-        # now = time.time()
-        # for peer in list(self.peers):
-        #     print(now)
-        #     if now - peer.last_seen > TIMEOUT:
-        #         print(f"[×] {peer.peer_name} semble déconnecté (timeout)")
-        #         if self.active_peer and self.active_peer.ip_address == peer.ip_address:
-        #             self.chat_display.clear()
-        #             self.chat_header.setText("Sélectionnez un @Host")
-        #             self.active_peer = None
-        #             self.active_session = None
-        #         self.peers.remove(peer)
-        #         self.update_user_list()
-
-
-       
-
-
-# if __name__ == "__main__":
-#     app = QApplication(sys.argv)
-
-#     startup = StartupWindow()
-#     startup.show()
-#     app.exec()
-
-#     if startup.username and startup.selected_ip:
-#         window = ChatApp(username=startup.username, ip=startup.selected_ip)
-#         window.show()
-#         sys.exit(app.exec())
-
-
-# if __name__ == "__main__":
-#     app = QApplication(sys.argv)
-#     window = ChatApp(username="yassine", ip="172.23.112.36")
-#     window.show()
-#     sys.exit(app.exec())
-
-
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
@@ -649,7 +551,7 @@ if __name__ == "__main__":
     app.exec()
 
     if startup.username:
-        ip_local = socket.gethostbyname(socket.gethostname())
+        ip_local = "172.23.112.36"
 
         window = ChatApp(username=startup.username, ip=ip_local)
         window.show()
